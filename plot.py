@@ -37,9 +37,8 @@ for i in range(0, len(complete_positions)):
     plt.pause(0.1)
     plt.cla()
     # print(complete_positions[i][:,2:5])
-    p1 = ax.scatter(complete_positions[i][:,0], complete_positions[i][:,1], c=complete_positions[i][:,2:5], marker='o', s=1)
+    p1 = ax.scatter(complete_positions[i][:,0], complete_positions[i][:,1], c=complete_positions[i][:,2:5], marker='o', s=0.5)
     # for j in range(0, len(complete_positions[i])):
     #     [x, y, r, g, b] = complete_positions[i][j]
     #     ax.plot(x, y, c='w', marker='o', markersize=1)
 
-plt.show()

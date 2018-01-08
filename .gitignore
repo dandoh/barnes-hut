@@ -3,4 +3,5 @@ cmake-build-debug
 backup.cpp
 main
 .idea
+*.txt
 

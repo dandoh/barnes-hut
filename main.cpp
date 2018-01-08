@@ -5,7 +5,8 @@
 #include<time.h>
 #include<assert.h>
 #include<cmath>
-#include <fstream>
+#include<fstream>
+#include<getopt.h>
 
 #define DEBUG(x) std::cerr << #x << " = " << x << std::endl;
 #define DEBUGA(a, b) std::cout << "[ "; for (auto x = (a); x != (b); x++) std::cout << *x << " ";\
@@ -224,56 +225,59 @@ class tree_buffer {
 MPI_Datatype mpi_body_type;
 MPI_Datatype mpi_quad_type;
 
+std::string
+    input_file,
+    output_file = "positions.txt",
+    mode = "p";
+double dt = 0.2;
+int num_steps = 250;
+double elapsed_time;
+
 void run_serial() {
-  freopen("positions.txt", "w", stdout);
-  freopen("inputs/galaxy1.txt", "r", stdin);
-
-  int initial_size;
+  int n;
+  // length of the field
+  double length;
+  // radius of the field, length = 2 * radius
   double radius;
-  std::cin >> initial_size >> radius;
+  std::ifstream is;
+  std::ofstream os;
+  is.open(input_file);
+  os.open(output_file);
 
-  double length = 2 * radius;
-  int current_size = initial_size;
+  is >> n >> radius;
+  length = 2 * radius;
+  os << length << "\n";
+  body *bodies = new body[n + 5];
 
-  body bb[initial_size + 5];
-
-  for (int i = 1; i <= initial_size; i++) {
+  // read body from file
+  for (int i = 0; i < n; i++) {
     double x, y, vx, vy, mass;
     double r, g, b;
-    std::cin >> x >> y >> vx >> vy >> mass >> r >> g >> b;
-    bb[i] = body(mass, x, y, vx, vy, 0, 0);
-    bb[i].r = r / 255;
-    bb[i].g = g / 255;
-    bb[i].b = b / 255;
+    is >> x >> y >> vx >> vy >> mass >> r >> g >> b;
+    bodies[i] = body(mass, x, y, vx, vy, 0, 0);
+    bodies[i].r = r / 255;
+    bodies[i].g = g / 255;
+    bodies[i].b = b / 255;
   }
+  is.close();
 
-  std::cout << length << "\n";
-  double dt = 0.1;
-  for (double t = 0; t < 5; t += dt) {
-    int sz = 0;
-    for (int i = 1; i <= current_size; i++) {
-      if (bb[i].x <= length / 2 && bb[i].x >= -length / 2
-          && bb[i].y <= length / 2 && bb[i].y >= -length / 2) {
-        bb[++sz] = bb[i];
-      }
-    }
-    current_size = sz;
+  for (int st = 0; st < num_steps; st++) {
 
-    for (int i = 1; i <= current_size; i++) {
-      std::cout << bb[i].x << " " << bb[i].y << " "
-                << bb[i].r << " " << bb[i].g << " " << bb[i].b
-                << "\n";
+    for (int i = 0; i < n; i++) {
+      os << bodies[i].x << " " << bodies[i].y << " "
+         << bodies[i].r << " " << bodies[i].g << " " << bodies[i].b
+         << "\n";
     }
-    std::cout << "\n";
+    os << "\n";
 
-    tree_buffer tree(current_size, length);
-    for (int i = 1; i <= current_size; i++) {
-      tree.insert(bb[i]);
+    tree_buffer tree(n, length);
+    for (int i = 0; i < n; i++) {
+      tree.insert(bodies[i]);
     }
-    for (int i = 1; i <= current_size; i++) {
-      bb[i].reset_force();
-      tree.update_force(bb[i]);
-      bb[i].update(dt);
+    for (int i = 0; i < n; i++) {
+      bodies[i].reset_force();
+      tree.update_force(bodies[i]);
+      bodies[i].update(dt);
     }
   }
 
@@ -318,26 +322,25 @@ void init_types() {
   init_quad_type();
 }
 
-int main(int argc,
-         char *argv[]) {
-
+void run_parallel() {
   int rank, size;
-
-  MPI_Init(&argc, &argv);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   init_types();
 
   // read file and broadcast number of bodies and field length
+  // number of bodies
   int n;
+  // length of the field
   double length;
+  // radius of the field, length = 2 * radius
   double radius;
   std::ifstream is;
   std::ofstream os;
   if (rank == 0) {
-    is.open("inputs/galaxy1.txt");
-    os.open("positions.txt");
+    is.open(input_file);
+    os.open(output_file);
 
     is >> n >> radius;
     length = 2 * radius;
@@ -363,10 +366,6 @@ int main(int argc,
     is.close();
   }
 
-//   broadcast to everyone all the body
-//  MPI_Bcast(bodies, n, mpi_body_type, 0, MPI_COMM_WORLD);
-
-
   body *local_bodies = new body[2 * n / size];
 
   // parameter for scattering the bodies over
@@ -386,14 +385,7 @@ int main(int argc,
     sum += send_counts[i];
   }
 
-  MPI_Scatterv(bodies, send_counts, displs, mpi_body_type, local_bodies,
-               2 * n / size, mpi_body_type, 0, MPI_COMM_WORLD);
-
-//  std::cout << rank << " " << send_counts[rank] << " " << displs[rank] << std::endl;
-
-  double tmax = 10;
-  double dt = 0.1;
-  for (double t = 0; t <= tmax; t += dt) {
+  for (int st = 0; st < num_steps; st++) {
     // print position of bodies
     if (rank == 0) {
       for (int i = 0; i < n; i++) {
@@ -440,6 +432,85 @@ int main(int argc,
                 bodies, send_counts, displs, mpi_body_type, 0, MPI_COMM_WORLD);
   }
 
-  MPI_Finalize();
   delete[] bodies;
+}
+
+bool parse_input(int argc, char *argv[]) {
+  static const char *opt_string = "i:o:m:d:s:";
+  int in;
+  try {
+    while ((in = getopt(argc, argv, opt_string)) != -1) {
+      switch (in) {
+        case 'i':input_file = optarg;
+          break;
+        case 'o':output_file = optarg;
+          break;
+        case 'm':mode = optarg;
+          break;
+        case 'd':dt = std::stod(optarg);
+          break;
+        case 's':num_steps = std::stoi(optarg);
+          break;
+        default:return false;
+      }
+    }
+  } catch (std::exception const &e) {
+    return false;
+  }
+
+  // must provide input file
+  if (input_file == "") {
+    return false;
+  }
+
+  return true;
+}
+
+void print_statistics() {
+  int rank;
+  int size;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  if (rank == 0) {
+    std::cout << "Input file: " << input_file << std::endl;
+    std::cout << "Output file: " << output_file << std::endl;
+    std::cout << "Mode: " << (mode == "p" ? "Parallel" : "Sequential") << std::endl;
+    if (mode == "p") {
+      std::cout << "Num core: " << size << std::endl;
+    }
+    std::cout << "Delta time: " << dt << std::endl;
+    std::cout << "Number of steps: " << num_steps << std::endl;
+    std::cout << "Elapsed time: " << elapsed_time << "s" << std::endl;
+  }
+}
+
+int main(int argc,
+         char *argv[]) {
+
+  MPI_Init(&argc, &argv);
+
+  int rank, size;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+  // parse arguments
+  if (!parse_input(argc, argv)) {
+    if (rank == 0) {
+      std::cout << "Error: Invalid command line input" << std::endl;
+    }
+    return -1;
+  }
+
+  double start_time = MPI_Wtime();
+  if (mode == "p") {
+    run_parallel();
+  } else {
+    if (rank == 0) {
+      run_serial();
+    }
+  }
+  elapsed_time = MPI_Wtime() - start_time;
+  print_statistics();
+
+  MPI_Finalize();
 }

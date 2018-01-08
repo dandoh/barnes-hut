@@ -1,15 +1,14 @@
 
-from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import numpy as np
 import math
-from itertools import product, combinations
 import sys
 
 
 
 file_object = open(sys.argv[1],"r")
 inp = file_object.readlines()
+
 # length of simulation box
 length = float(inp[0])
 a = inp[1:]

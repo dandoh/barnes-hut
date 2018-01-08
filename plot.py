@@ -42,3 +42,4 @@ for i in range(0, len(complete_positions)):
     #     [x, y, r, g, b] = complete_positions[i][j]
     #     ax.plot(x, y, c='w', marker='o', markersize=1)
 
+plt.show()

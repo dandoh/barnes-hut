@@ -113,6 +113,11 @@ class tree_buffer {
   tree_buffer(int n, double length) : n(n), length(length) {
     quads.push_back(quad(0, 0, length));
   }
+  tree_buffer(int n, double length, quad *qs, int quads_length) : n(n), length(length) {
+    for (int i = 0; i < quads_length; i++) {
+      quads.push_back(qs[i]);
+    }
+  }
 
   /**
    * Insert a body into this quad tree
@@ -176,11 +181,11 @@ class tree_buffer {
                              quads[i].center_y - quads[i].length / 4,
                              quads[i].length / 2));
         quads[i].se = (int) (quads.size() - 1);
-        // update the mass_x, mass_y
-        quads[i].update_mass_and_pos(b);
         // done with this node, now children
         put_body(i, body(quads[i].mass, quads[i].mass_x, quads[i].mass_y));
         put_body(i, b);
+        // update the mass_x, mass_y
+        quads[i].update_mass_and_pos(b);
       } else {
         quads[i].update_mass_and_pos(b);
         put_body(i, b);
@@ -221,7 +226,7 @@ MPI_Datatype mpi_quad_type;
 
 void run_serial() {
   freopen("positions.txt", "w", stdout);
-  freopen("inputs/galaxy3.txt", "r", stdin);
+  freopen("inputs/galaxy1.txt", "r", stdin);
 
   int initial_size;
   double radius;
@@ -244,9 +249,9 @@ void run_serial() {
 
   std::cout << length << "\n";
   double dt = 0.1;
-  for (double t = 0; t < 10; t += dt) {
+  for (double t = 0; t < 5; t += dt) {
     int sz = 0;
-    for (int i = 1; i <= initial_size; i++) {
+    for (int i = 1; i <= current_size; i++) {
       if (bb[i].x <= length / 2 && bb[i].x >= -length / 2
           && bb[i].y <= length / 2 && bb[i].y >= -length / 2) {
         bb[++sz] = bb[i];
@@ -327,16 +332,21 @@ int main(int argc,
   // read file and broadcast number of bodies and field length
   int n;
   double length;
+  double radius;
   std::ifstream is;
+  std::ofstream os;
   if (rank == 0) {
     is.open("inputs/galaxy1.txt");
-    is >> n >> length;
+    os.open("positions.txt");
+
+    is >> n >> radius;
+    length = 2 * radius;
+    os << length << "\n";
   }
 
   // broadcast n and length
   MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&length, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
 
   body *bodies = new body[n + 5];
   // read body from file
@@ -359,21 +369,77 @@ int main(int argc,
 
   body *local_bodies = new body[2 * n / size];
 
-  double tmax = 30;
-  double dt = 0.2;
-  for (double t = 0; t <= tmax; t += dt) {
-    // build the tree
+  // parameter for scattering the bodies over
+  int *send_counts = new int[size];
+  int *displs = new int[size];
+  int rem = n % size;
+  int sum = 0;
 
-    // send the tree over the network
+  for (int i = 0; i < size; i++) {
+    send_counts[i] = n / size;
+    if (rem > 0) {
+      send_counts[i]++;
+      rem--;
+    }
+
+    displs[i] = sum;
+    sum += send_counts[i];
+  }
+
+  MPI_Scatterv(bodies, send_counts, displs, mpi_body_type, local_bodies,
+               2 * n / size, mpi_body_type, 0, MPI_COMM_WORLD);
+
+//  std::cout << rank << " " << send_counts[rank] << " " << displs[rank] << std::endl;
+
+  double tmax = 10;
+  double dt = 0.1;
+  for (double t = 0; t <= tmax; t += dt) {
+    // print position of bodies
+    if (rank == 0) {
+      for (int i = 0; i < n; i++) {
+        os << bodies[i].x << " " << bodies[i].y << " "
+           << bodies[i].r << " " << bodies[i].g << " " << bodies[i].b
+           << "\n";
+      }
+      os << "\n";
+    }
+    // build the tree in root process
+    int quads_length = 0;
+    tree_buffer tree(n, length);
+
+    if (rank == 0) {
+      for (int i = 0; i < n; i++) {
+        tree.insert(bodies[i]);
+      }
+      quads_length = (int) tree.quads.size();
+    }
+    // send info about the array of quads inside the tree
+    MPI_Bcast(&quads_length, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    quad *qs = new quad[quads_length];
+
+    if (rank == 0) {
+      std::copy(tree.quads.begin(), tree.quads.end(), qs);
+    }
+
+    // send the tree over the network - TODO
+    MPI_Bcast(qs, quads_length, mpi_quad_type, 0, MPI_COMM_WORLD);
+    tree_buffer local_tree(n, length, qs, quads_length);
 
     // scatter the body
-
-
+    MPI_Scatterv(bodies, send_counts, displs, mpi_body_type, local_bodies,
+                 send_counts[rank], mpi_body_type, 0, MPI_COMM_WORLD);
     // compute
+    for (int i = 0; i < send_counts[rank]; i++) {
+      local_bodies[i].reset_force();
+      local_tree.update_force(local_bodies[i]);
+      local_bodies[i].update(dt);
+    }
 
     // gather body
+    MPI_Gatherv(local_bodies, send_counts[rank], mpi_body_type,
+                bodies, send_counts, displs, mpi_body_type, 0, MPI_COMM_WORLD);
   }
 
   MPI_Finalize();
-  delete [] bodies;
+  delete[] bodies;
 }

@@ -7,6 +7,7 @@
 #include<cmath>
 #include<fstream>
 #include<getopt.h>
+#include<stddef.h>
 
 #include "body.h"
 #include "quad.h"

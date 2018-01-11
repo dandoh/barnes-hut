@@ -4,4 +4,9 @@ backup.cpp
 main
 .idea
 *.txt
+btl
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+CmakeFiles
 

@@ -27,7 +27,8 @@ std::string
     mode = "p";
 double dt = 0.2;
 int num_steps = 250;
-double elapsed_time;
+double elapsed_time = 0;
+double communication_time = 0;
 
 void run_serial() {
   int n;
@@ -143,9 +144,12 @@ void run_parallel() {
     os << length << "\n";
   }
 
+  double pivot;
   // broadcast n and length
+  pivot = MPI_Wtime();
   MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(&length, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  communication_time += MPI_Wtime() - pivot;
 
   body *bodies = new body[n + 5];
   // read body from file
@@ -202,7 +206,9 @@ void run_parallel() {
       quads_length = (int) tree.quads.size();
     }
     // send info about the array of quads inside the tree
+    pivot = MPI_Wtime();
     MPI_Bcast(&quads_length, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    communication_time += MPI_Wtime() - pivot;
     quad *qs = new quad[quads_length];
 
     if (rank == 0) {
@@ -210,12 +216,16 @@ void run_parallel() {
     }
 
     // send the tree over the network - TODO
+    pivot = MPI_Wtime();
     MPI_Bcast(qs, quads_length, mpi_quad_type, 0, MPI_COMM_WORLD);
+    communication_time += MPI_Wtime() - pivot;
     tree_buffer local_tree(n, length, qs, quads_length);
 
     // scatter the body
+    pivot = MPI_Wtime();
     MPI_Scatterv(bodies, send_counts, displs, mpi_body_type, local_bodies,
                  send_counts[rank], mpi_body_type, 0, MPI_COMM_WORLD);
+    communication_time += MPI_Wtime() - pivot;
     // compute
     for (int i = 0; i < send_counts[rank]; i++) {
       local_bodies[i].reset_force();
@@ -223,9 +233,11 @@ void run_parallel() {
       local_bodies[i].update(dt);
     }
 
+    pivot = MPI_Wtime();
     // gather body
     MPI_Gatherv(local_bodies, send_counts[rank], mpi_body_type,
                 bodies, send_counts, displs, mpi_body_type, 0, MPI_COMM_WORLD);
+    communication_time += MPI_Wtime() - pivot;
   }
 
   delete[] bodies;
@@ -272,11 +284,14 @@ void print_statistics() {
     std::cout << "Output file: " << output_file << std::endl;
     std::cout << "Mode: " << (mode == "p" ? "Parallel" : "Sequential") << std::endl;
     if (mode == "p") {
-      std::cout << "Num core: " << size << std::endl;
+      std::cout << "Num processes: " << size << std::endl;
     }
     std::cout << "Delta time: " << dt << std::endl;
     std::cout << "Number of steps: " << num_steps << std::endl;
     std::cout << "Elapsed time: " << elapsed_time << "s" << std::endl;
+    if (mode == "p") {
+      std::cout << "Communication time: " << communication_time << "s" << std::endl;
+    }
   }
 }
 
